@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "Auto Yapping by Lo9ic",
+  "version": "2.0",
+  "description": "Adds a button to Twitter for generating comments and translations in multiple languages using Groq API with automatic language detection",
+  "permissions": ["scripting", "activeTab", "storage"],
+  "options_page": "options.html",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Auto Yapping by Lo9ic"
+  },
+  "host_permissions": ["https://x.com/*", "https://twitter.com/*", "https://pro.x.com/"],
+  "content_scripts": [
+    {
+      "matches": ["https://x.com/*", "https://twitter.com/*", "https://pro.x.com/* "],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
