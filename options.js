@@ -3,6 +3,7 @@ const PROVIDER_KEY_FIELDS = {
   groq: { key: "groqApiKey", label: "Groq API Key", placeholder: "gsk_..." },
   openai: { key: "openaiApiKey", label: "OpenAI API Key", placeholder: "sk-..." },
   gemini: { key: "geminiApiKey", label: "Gemini API Key", placeholder: "AIza..." },
+  grok: { key: "grokApiKey", label: "Grok API Key", placeholder: "xai-..." },
 };
 
 function $(id) {
@@ -17,7 +18,7 @@ function showStatus(message) {
 }
 
 function loadSettings() {
-  chrome.storage.sync.get(["provider", "groqApiKey", "openaiApiKey", "geminiApiKey", "replyPrompt"], (data) => {
+  chrome.storage.sync.get(["provider", "groqApiKey", "openaiApiKey", "geminiApiKey", "grokApiKey", "replyPrompt"], (data) => {
     const provider = data.provider || "groq";
     $("provider").value = provider;
     const keyField = PROVIDER_KEY_FIELDS[provider];
@@ -32,13 +33,14 @@ function saveSettings() {
   const apiKey = $("apiKey").value.trim();
   const replyPrompt = $("prompt").value.trim();
 
-  chrome.storage.sync.get(["groqApiKey", "openaiApiKey", "geminiApiKey"], (data) => {
+  chrome.storage.sync.get(["groqApiKey", "openaiApiKey", "geminiApiKey", "grokApiKey"], (data) => {
     const payload = {
       provider,
       replyPrompt,
       groqApiKey: data.groqApiKey || "",
       openaiApiKey: data.openaiApiKey || "",
       geminiApiKey: data.geminiApiKey || "",
+      grokApiKey: data.grokApiKey || "",
     };
     const meta = PROVIDER_KEY_FIELDS[provider];
     payload[meta.key] = apiKey;

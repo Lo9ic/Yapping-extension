@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <title>Auto Yapping by Lo9ic</title>
@@ -7,6 +8,7 @@
     :root {
       color-scheme: dark;
     }
+
     body {
       margin: 0;
       padding: 14px;
@@ -15,16 +17,20 @@
       color: #e6ecf0;
       width: 340px;
     }
+
     h1 {
       margin: 0 0 12px 0;
       font-size: 18px;
     }
+
     label {
       display: block;
       font-weight: 600;
       margin-bottom: 4px;
     }
-    input[type="text"], textarea {
+
+    input[type="text"],
+    textarea {
       width: 100%;
       box-sizing: border-box;
       padding: 10px;
@@ -34,23 +40,28 @@
       color: #e6ecf0;
       font-size: 13px;
     }
+
     textarea {
       min-height: 110px;
       resize: vertical;
     }
+
     .field {
       margin-bottom: 12px;
     }
+
     .hint {
       color: #8899a6;
       font-size: 12px;
       margin-top: 4px;
     }
+
     .actions {
       display: flex;
       gap: 8px;
       margin-top: 8px;
     }
+
     button {
       padding: 10px 12px;
       border-radius: 8px;
@@ -60,16 +71,19 @@
       font-size: 13px;
       flex: 1;
     }
+
     #save {
       background: #1da1f2;
       color: white;
     }
+
     #open-options {
       background: #22303c;
       color: #e6ecf0;
       border: 1px solid #38444d;
       flex: 0 0 auto;
     }
+
     #status {
       margin-top: 8px;
       font-size: 12px;
@@ -78,14 +92,17 @@
     }
   </style>
 </head>
+
 <body>
   <h1>Auto Yapping by Lo9ic</h1>
   <div class="field">
     <label for="provider">Provider</label>
-    <select id="provider" style="width:100%;padding:10px;border-radius:8px;border:1px solid #38444d;background:#0f1419;color:#e6ecf0;font-size:13px;">
+    <select id="provider"
+      style="width:100%;padding:10px;border-radius:8px;border:1px solid #38444d;background:#0f1419;color:#e6ecf0;font-size:13px;">
       <option value="groq">Groq (llama-3.1-8b-instant)</option>
       <option value="openai">OpenAI (gpt-4o-mini)</option>
       <option value="gemini">Gemini (gemini-2.0-flash)</option>
+      <option value="grok">Grok (grok-4-1-fast-reasoning)</option>
     </select>
     <div class="hint">Choose which API to call for replies.</div>
   </div>
@@ -106,4 +123,5 @@
   <div id="status"></div>
   <script src="popup.js"></script>
 </body>
+
 </html>

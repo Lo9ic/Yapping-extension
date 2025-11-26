@@ -15,6 +15,7 @@ const settingsCache = {
   groqApiKey: "",
   openaiApiKey: "",
   geminiApiKey: "",
+  grokApiKey: "",
   prompt: DEFAULT_PROMPT,
   loaded: false,
 };
@@ -28,11 +29,12 @@ function loadSettings() {
       return resolve(settingsCache);
     }
 
-    chrome.storage.sync.get(["provider", "groqApiKey", "openaiApiKey", "geminiApiKey", "replyPrompt"], (data) => {
+    chrome.storage.sync.get(["provider", "groqApiKey", "openaiApiKey", "geminiApiKey", "grokApiKey", "replyPrompt"], (data) => {
       settingsCache.provider = data.provider || "groq";
       settingsCache.groqApiKey = data.groqApiKey || "";
       settingsCache.openaiApiKey = data.openaiApiKey || "";
       settingsCache.geminiApiKey = data.geminiApiKey || "";
+      settingsCache.grokApiKey = data.grokApiKey || "";
       settingsCache.prompt = data.replyPrompt ?? DEFAULT_PROMPT;
       settingsCache.loaded = true;
       resolve(settingsCache);
@@ -58,6 +60,15 @@ function getProviderConfig(settings) {
       url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
       model: "gemini-2.0-flash",
       isGemini: true,
+    };
+  }
+  if (provider === "grok") {
+    return {
+      provider,
+      apiKey: settings.grokApiKey || "",
+      url: "https://api.x.ai/v1/chat/completions",
+      model: "grok-4-1-fast-reasoning",
+      isGemini: false,
     };
   }
   return {
@@ -99,7 +110,7 @@ function createOrGetFloatingWindow() {
 function insertButtonIntoReplyBoxes() {
   // Find all reply boxes on the page
   const replyBoxes = document.querySelectorAll('div[contenteditable="true"][data-testid="tweetTextarea_0"]');
-  
+
   replyBoxes.forEach((box) => {
     const container = box.parentElement;
     if (!container || container.querySelector(".ai-reply-button")) return;
@@ -155,18 +166,9 @@ function insertButtonIntoReplyBoxes() {
 async function generateText(box, container) {
   const floatingWin = createOrGetFloatingWindow();
 
-  if (floatingWin.style.display === "flex") {
-    floatingWin.style.display = "none";
-    floatingWin.innerHTML = "";
-    return;
-  }
-
-  floatingWin.style.display = "flex";
-  floatingWin.innerHTML = "⏳ Generating reply...";
-
-  const rect = container.getBoundingClientRect();
-  floatingWin.style.top = window.scrollY + rect.bottom + 6 + "px";
-  floatingWin.style.left = window.scrollX + rect.left + "px";
+  // Hide the floating window - we don't want to show it
+  floatingWin.style.display = "none";
+  floatingWin.innerHTML = "";
 
   try {
     const settings = await loadSettings();
@@ -272,56 +274,11 @@ ${tweetText}`;
       return;
     }
 
+    // Directly insert the reply without showing preview
+    insertTextProperly(box, replyText.trim());
+    floatingWin.style.display = "none";
     floatingWin.innerHTML = "";
-    
-    // Create a preview element to show the generated reply
-    const previewDiv = document.createElement("div");
-    previewDiv.textContent = replyText.trim();
-    Object.assign(previewDiv.style, {
-      backgroundColor: "#1da1f2",
-      border: "none",
-      borderRadius: "6px",
-      padding: "8px",
-      color: "white",
-      textAlign: "left",
-      whiteSpace: "normal",
-      fontSize: "14px",
-      width: "100%",
-      marginBottom: "6px",
-    });
-    
-    // Create a button to insert the reply
-    const insertBtn = document.createElement("button");
-    insertBtn.textContent = "Insert Reply";
-    Object.assign(insertBtn.style, {
-      backgroundColor: "#1da1f2",
-      border: "none",
-      borderRadius: "6px",
-      padding: "8px",
-      cursor: "pointer",
-      color: "white",
-      textAlign: "center",
-      fontSize: "14px",
-      width: "100%",
-    });
-
-    insertBtn.addEventListener("click", () => {
-      insertTextProperly(box, replyText.trim());
-      floatingWin.style.display = "none";
-      floatingWin.innerHTML = "";
-      box.focus();
-    });
-
-    floatingWin.appendChild(previewDiv);
-    floatingWin.appendChild(insertBtn);
-    
-    // Auto-insert the reply after a short delay
-    setTimeout(() => {
-      insertTextProperly(box, replyText.trim());
-      floatingWin.style.display = "none";
-      floatingWin.innerHTML = "";
-      box.focus();
-    });
+    box.focus();
   } catch (err) {
     floatingWin.innerHTML = `❌ Error generating reply: ${err.message}`;
     console.error("GenerateText error:", err);
@@ -333,82 +290,163 @@ function insertTextProperly(el, text) {
     console.error("insertTextProperly: Element is undefined");
     return;
   }
-  
+
   // Focus the element first
   el.focus();
-  
-  // Clear any existing text
-  el.innerText = "";
-  
-  // Method 1: Try using clipboard API and paste
-  navigator.clipboard.writeText(text).then(() => {
-    // Trigger paste event
-    const pasteEvent = new ClipboardEvent('paste', {
+
+  // Select all existing content
+  const selection = window.getSelection();
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  selection.removeAllRanges();
+  selection.addRange(range);
+
+  // Use execCommand to insert text - this maintains editability better
+  try {
+    // First, try using execCommand which works well with contenteditable
+    const success = document.execCommand('insertText', false, text);
+
+    if (!success) {
+      throw new Error("execCommand failed");
+    }
+
+    // Trigger input event for React
+    const inputEvent = new InputEvent('input', {
       bubbles: true,
       cancelable: true,
-      clipboardData: new DataTransfer()
+      data: text,
+      inputType: 'insertText'
     });
-    pasteEvent.clipboardData.setData('text/plain', text);
-    el.dispatchEvent(pasteEvent);
-    
-    // If paste doesn't work, try direct methods
-    setTimeout(() => {
-      if (el.innerText.trim() === "") {
-        // Method 2: Try to find and update React's internal state
-        try {
-          // Find React fiber node
-          const reactKey = Object.keys(el).find(key => key.startsWith('__reactFiber'));
-          if (reactKey) {
-            const fiber = el[reactKey];
-            if (fiber && fiber.memoizedProps && fiber.memoizedProps.onChange) {
-              // Simulate React change event
-              const syntheticEvent = { target: el, currentTarget: el };
-              fiber.memoizedProps.onChange(syntheticEvent);
-            }
-          }
-        } catch (e) {
-          console.log("React state update failed");
-        }
-        
-        // Method 3: Direct text insertion with multiple event triggers
-        el.innerText = text;
-        
-        // Create and dispatch a comprehensive set of events
-        const events = [
-          'focus', 'focusin', 'focusout', 'blur',
-          'keydown', 'keyup', 'keypress',
-          'input', 'change', 'paste', 'cut', 'copy',
-          'compositionstart', 'compositionupdate', 'compositionend'
-        ];
-        
-        events.forEach(eventType => {
-          const event = new Event(eventType, { bubbles: true, cancelable: true });
-          el.dispatchEvent(event);
-        });
-        
-        // Method 4: Try to trigger the input using a more direct approach
-        try {
-          const inputEvent = new InputEvent('input', {
-            bubbles: true,
-            cancelable: true,
-            data: text,
-            inputType: 'insertText'
-          });
-          el.dispatchEvent(inputEvent);
-        } catch (e) {
-          console.log("InputEvent creation failed");
-        }
-      }
-    }, 100);
-  }).catch(err => {
-    console.error("Clipboard write failed:", err);
-    
-    // Fallback: Direct text insertion
-    el.innerText = text;
-    
-    // Trigger events
-    const inputEvent = new Event('input', { bubbles: true });
     el.dispatchEvent(inputEvent);
+
+    // Try to trigger React's onChange handler
+    triggerReactChange(el);
+
+    // Place cursor at the end
+    setTimeout(() => {
+      el.focus();
+      const sel = window.getSelection();
+      const rng = document.createRange();
+      rng.selectNodeContents(el);
+      rng.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(rng);
+    }, 10);
+
+  } catch (e) {
+    console.error("execCommand insertion failed, trying alternative:", e);
+
+    // Alternative method: Set textContent and trigger events
+    try {
+      el.textContent = text;
+
+      // Trigger comprehensive events
+      const events = [
+        new Event('focus', { bubbles: true }),
+        new InputEvent('input', {
+          bubbles: true,
+          cancelable: true,
+          data: text,
+          inputType: 'insertText'
+        }),
+        new Event('change', { bubbles: true }),
+        new KeyboardEvent('keyup', { bubbles: true })
+      ];
+
+      events.forEach(event => el.dispatchEvent(event));
+
+      // Try to trigger React's onChange handler
+      triggerReactChange(el);
+
+      // Place cursor at the end
+      setTimeout(() => {
+        el.focus();
+        const sel = window.getSelection();
+        const rng = document.createRange();
+        rng.selectNodeContents(el);
+        rng.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(rng);
+      }, 10);
+
+    } catch (err) {
+      console.error("Alternative insertion method failed:", err);
+      fallbackInsertion(el, text);
+    }
+  }
+}
+
+function triggerReactChange(el) {
+  try {
+    // Try multiple possible React internal keys
+    const reactKeys = [
+      '__reactFiber$',
+      '__reactInternalInstance$',
+      '__reactFiber',
+      '__reactInternalInstance'
+    ];
+
+    let reactKey = null;
+    for (const key of reactKeys) {
+      const foundKey = Object.keys(el).find(k => k.startsWith(key));
+      if (foundKey) {
+        reactKey = foundKey;
+        break;
+      }
+    }
+
+    if (reactKey) {
+      const fiber = el[reactKey];
+      let onChangeHandler = null;
+
+      // Try to find the onChange handler in different places
+      if (fiber && fiber.memoizedProps && fiber.memoizedProps.onChange) {
+        onChangeHandler = fiber.memoizedProps.onChange;
+      } else if (fiber && fiber.return && fiber.return.memoizedProps && fiber.return.memoizedProps.onChange) {
+        onChangeHandler = fiber.return.memoizedProps.onChange;
+      } else if (fiber && fiber.stateNode && fiber.stateNode.props && fiber.stateNode.props.onChange) {
+        onChangeHandler = fiber.stateNode.props.onChange;
+      }
+
+      if (onChangeHandler && typeof onChangeHandler === 'function') {
+        // Create a synthetic event that mimics React's event
+        const syntheticEvent = {
+          target: el,
+          currentTarget: el,
+          type: 'change',
+          bubbles: true,
+          cancelable: true,
+          nativeEvent: new Event('change', { bubbles: true })
+        };
+        onChangeHandler(syntheticEvent);
+      }
+    }
+  } catch (e) {
+    console.log("React state update failed:", e);
+  }
+}
+
+function fallbackInsertion(el, text) {
+  // Last resort: try the clipboard method
+  navigator.clipboard.writeText(text).then(() => {
+    el.focus();
+    document.execCommand('paste');
+
+    // Trigger events
+    const inputEvent = new InputEvent('input', {
+      bubbles: true,
+      cancelable: true,
+      data: text,
+      inputType: 'insertFromPaste'
+    });
+    el.dispatchEvent(inputEvent);
+
+    const changeEvent = new Event('change', { bubbles: true });
+    el.dispatchEvent(changeEvent);
+
+    triggerReactChange(el);
+  }).catch(err => {
+    console.error("All insertion methods failed:", err);
   });
 }
 
@@ -432,17 +470,17 @@ function extractTweetTextFromContainer(container) {
 
 function getTweetTextFromDOM(replyBox) {
   console.log("getTweetTextFromDOM: Starting with replyBox:", replyBox);
-  
+
   // Try multiple approaches to find the tweet text
   let tweetText = "";
-  
+
   // Method 1: Look for the tweet in the same article as the reply box
   const article = replyBox.closest("article");
   if (article) {
     tweetText = extractTweetTextFromContainer(article);
     if (tweetText) console.log("getTweetTextFromDOM: Found tweet text within article:", tweetText);
   }
-  
+
   // Method 2: If not found in article, try looking in the dialog
   if (!tweetText) {
     const dialog = replyBox.closest('[role="dialog"]');
@@ -451,7 +489,7 @@ function getTweetTextFromDOM(replyBox) {
       if (tweetText) console.log("getTweetTextFromDOM: Found tweet text in dialog:", tweetText);
     }
   }
-  
+
   // Method 3: Try to find the tweet by looking up the DOM tree
   if (!tweetText) {
     let parent = replyBox.parentElement;
@@ -464,7 +502,7 @@ function getTweetTextFromDOM(replyBox) {
       parent = parent.parentElement;
     }
   }
-  
+
   // Method 4: Last resort - try to find any element with substantial text near the reply box
   if (!tweetText) {
     const nearbyElements = document.querySelectorAll('div[data-testid="tweetText"], article[data-testid="tweet"]');
@@ -477,7 +515,7 @@ function getTweetTextFromDOM(replyBox) {
       }
     }
   }
-  
+
   console.log("getTweetTextFromDOM: Final tweet text:", tweetText);
   return tweetText;
 }
