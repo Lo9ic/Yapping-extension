@@ -17,12 +17,18 @@ function showStatus(message, isError = false) {
 }
 
 function loadSettings() {
-  chrome.storage.sync.get(["provider", "groqApiKey", "openaiApiKey", "geminiApiKey", "grokApiKey", "replyPrompt"], (data) => {
+  chrome.storage.sync.get(["provider", "groqApiKey", "openaiApiKey", "geminiApiKey", "grokApiKey", "replyPrompt", "showEngagementScore"], (data) => {
     const provider = data.provider || "groq";
     $("provider").value = provider;
     const meta = PROVIDER_KEY_FIELDS[provider];
     $("apiKey").value = data[meta.key] || "";
     $("prompt").value = data.replyPrompt ?? DEFAULT_PROMPT;
+
+    // Load engagement score toggle
+    const showEngagementScore = data.showEngagementScore !== undefined ? data.showEngagementScore : true;
+    $("showEngagementScore").checked = showEngagementScore;
+    $("toggleLabel").textContent = showEngagementScore ? "On" : "Off";
+
     updateKeyLabel(provider);
   });
 }
@@ -31,11 +37,13 @@ function saveSettings() {
   const provider = $("provider").value;
   const apiKey = $("apiKey").value.trim();
   const replyPrompt = $("prompt").value.trim();
+  const showEngagementScore = $("showEngagementScore").checked;
 
   chrome.storage.sync.get(["groqApiKey", "openaiApiKey", "geminiApiKey", "grokApiKey"], (data) => {
     const payload = {
       provider,
       replyPrompt,
+      showEngagementScore,
       groqApiKey: data.groqApiKey || "",
       openaiApiKey: data.openaiApiKey || "",
       geminiApiKey: data.geminiApiKey || "",
@@ -46,6 +54,17 @@ function saveSettings() {
 
     chrome.storage.sync.set(payload, () => {
       showStatus("Saved.");
+      // Notify content scripts of setting change
+      chrome.tabs.query({}, (tabs) => {
+        tabs.forEach((tab) => {
+          if (tab.url && (tab.url.includes("twitter.com") || tab.url.includes("x.com"))) {
+            chrome.tabs.sendMessage(tab.id, {
+              type: "toggleEngagementScore",
+              enabled: showEngagementScore
+            }).catch(() => { }); // Ignore errors if content script not ready
+          }
+        });
+      });
     });
   });
 }
@@ -78,5 +97,11 @@ document.addEventListener("DOMContentLoaded", () => {
       const meta = PROVIDER_KEY_FIELDS[provider];
       $("apiKey").value = data[meta.key] || "";
     });
+  });
+
+  // Handle engagement score toggle
+  $("showEngagementScore").addEventListener("change", (e) => {
+    $("toggleLabel").textContent = e.target.checked ? "On" : "Off";
+    saveSettings(); // Auto-save when toggled
   });
 });

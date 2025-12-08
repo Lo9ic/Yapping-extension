@@ -8,6 +8,8 @@
 // @grant        none
 // ==/UserScript==
 
+console.log('🚀 Auto Yapping Extension Loaded - Content Script Active');
+
 const DEFAULT_PROMPT = "";
 
 const settingsCache = {
@@ -17,6 +19,7 @@ const settingsCache = {
   geminiApiKey: "",
   grokApiKey: "",
   prompt: DEFAULT_PROMPT,
+  showEngagementScore: true,
   loaded: false,
 };
 
@@ -29,13 +32,14 @@ function loadSettings() {
       return resolve(settingsCache);
     }
 
-    chrome.storage.sync.get(["provider", "groqApiKey", "openaiApiKey", "geminiApiKey", "grokApiKey", "replyPrompt"], (data) => {
+    chrome.storage.sync.get(["provider", "groqApiKey", "openaiApiKey", "geminiApiKey", "grokApiKey", "replyPrompt", "showEngagementScore"], (data) => {
       settingsCache.provider = data.provider || "groq";
       settingsCache.groqApiKey = data.groqApiKey || "";
       settingsCache.openaiApiKey = data.openaiApiKey || "";
       settingsCache.geminiApiKey = data.geminiApiKey || "";
       settingsCache.grokApiKey = data.grokApiKey || "";
       settingsCache.prompt = data.replyPrompt ?? DEFAULT_PROMPT;
+      settingsCache.showEngagementScore = data.showEngagementScore !== undefined ? data.showEngagementScore : true;
       settingsCache.loaded = true;
       resolve(settingsCache);
     });
@@ -520,6 +524,529 @@ function getTweetTextFromDOM(replyBox) {
   return tweetText;
 }
 
+// ===== ENGAGEMENT SCORE SYSTEM =====
+
+// Parse formatted numbers like "1.2K", "3.5M", "3 rb" (Indonesian) to actual numbers
+function parseFormattedNumber(text) {
+  if (!text || typeof text !== 'string') return 0;
+
+  text = text.trim();
+
+  // Handle Indonesian "rb" (ribu = thousand) and "jt" (juta = million)
+  // Also handle English K, M, B
+  const multipliers = {
+    'RB': 1000,      // Indonesian: ribu (thousand)
+    'JT': 1000000,   // Indonesian: juta (million)
+    'K': 1000,       // English: thousand
+    'M': 1000000,    // English: million
+    'B': 1000000000  // English: billion
+  };
+
+  // Match patterns like "3.5K", "3 rb", "3.981" (with period as separator)
+  const match = text.match(/^([\d.,]+)\s*([a-zA-Z]+)?$/i);
+
+  if (!match) return parseInt(text.replace(/[.,]/g, '')) || 0;
+
+  let numberPart = match[1];
+  const suffix = match[2] ? match[2].toUpperCase() : '';
+
+  // Remove commas (used as thousand separators in English)
+  numberPart = numberPart.replace(/,/g, '');
+
+  // Check if period is used as thousand separator (Indonesian/European format)
+  // Examples: "3.981" = 3981, "1.234.567" = 1234567
+  // vs decimal: "3.5" = 3.5
+  const periodCount = (numberPart.match(/\./g) || []).length;
+
+  if (periodCount > 1) {
+    // Multiple periods = thousand separators
+    numberPart = numberPart.replace(/\./g, '');
+  } else if (periodCount === 1) {
+    // Single period - check if it's a separator or decimal
+    const parts = numberPart.split('.');
+    if (parts[1] && parts[1].length === 3) {
+      // Format like "3.981" (thousand separator)
+      numberPart = numberPart.replace('.', '');
+    }
+    // Otherwise it's a decimal like "3.5" - keep the period
+  }
+
+  const number = parseFloat(numberPart);
+  const multiplier = multipliers[suffix] || 1;
+
+  return number * multiplier; // Return precise number, don't floor
+}
+
+// Extract engagement metrics from a tweet article element
+function extractTweetMetrics(article) {
+  const metrics = {
+    comments: 0,
+    reposts: 0,
+    likes: 0,
+    views: 0,
+    timestamp: null,
+    hoursAgo: 0
+  };
+
+  try {
+    // Find engagement buttons group
+    const engagementGroup = article.querySelector('[role="group"]');
+    if (!engagementGroup) {
+      console.log('⚠️ No engagement group found in tweet');
+      return metrics;
+    }
+
+    console.log('✅ Found engagement group');
+
+    // Extract metrics using button position (language-agnostic)
+    // Twitter's button order is consistent: Reply, Repost, Like, View/Share
+    const buttons = engagementGroup.querySelectorAll('[role="button"]');
+    console.log(`📊 Found ${buttons.length} engagement buttons`);
+
+    buttons.forEach((button, index) => {
+      const ariaLabel = button.getAttribute('aria-label') || '';
+      console.log(`  Button ${index}: "${ariaLabel}"`);
+
+      // Extract the first number from the aria-label (works in any language)
+      const match = ariaLabel.match(/^(\d+[\d,KMB.]*)/i);
+
+      if (match) {
+        const value = parseFormattedNumber(match[1]);
+
+        // Twitter's button order is always: Reply, Repost, Like, View/Share
+        switch (index) {
+          case 0: // Reply button
+            metrics.comments = value;
+            console.log(`    → Replies: ${metrics.comments}`);
+            break;
+          case 1: // Repost button
+            metrics.reposts = value;
+            console.log(`    → Reposts: ${metrics.reposts}`);
+            break;
+          case 2: // Like button
+            metrics.likes = value;
+            console.log(`    → Likes: ${metrics.likes}`);
+            break;
+          case 3: // View count (if present)
+            // Some tweets show view count here
+            metrics.views = value;
+            console.log(`    → Views: ${metrics.views}`);
+            break;
+        }
+      }
+    });
+    // Enhanced view count detection - LANGUAGE AGNOSTIC
+    // No text matching, only DOM structure-based detection
+    if (!metrics.views || metrics.views === 0) {
+      console.log('🔍 Trying language-agnostic view count detection...');
+
+      // Strategy 1: Analytics link (most reliable)
+      const analyticsLink = article.querySelector('a[href*="/analytics"]');
+      if (analyticsLink) {
+        const viewText = analyticsLink.textContent || '';
+        console.log(`  Strategy 1 (analytics link): "${viewText}"`);
+        const viewMatch = viewText.match(/([\d.,]+)\s*([a-zA-Z]+)?/i);
+        if (viewMatch) {
+          const fullNumber = viewMatch[0].trim();
+          metrics.views = parseFormattedNumber(fullNumber);
+          console.log(`    → Views found: ${metrics.views}`);
+        }
+      }
+
+      // Strategy 2: Transition containers (fallback)
+      if (!metrics.views || metrics.views === 0) {
+        const transitionContainers = article.querySelectorAll('[data-testid="app-text-transition-container"]');
+        for (const container of transitionContainers) {
+          const viewText = container.textContent || '';
+          console.log(`  Strategy 2 (transition container): "${viewText}"`);
+
+          // Extract number pattern
+          const viewMatch = viewText.match(/([\d.,]+)\s*([a-zA-Z]+)?/i);
+          if (viewMatch) {
+            const fullNumber = viewMatch[0].trim();
+            const possibleViews = parseFormattedNumber(fullNumber);
+
+            // Heuristic: View counts are usually much higher than other metrics
+            // Skip if the number looks too similar to likes/reposts (likely not views)
+            if (possibleViews > metrics.likes * 2 || possibleViews > 1000) {
+              metrics.views = possibleViews;
+              console.log(`    → Views found: ${metrics.views}`);
+              break;
+            }
+          }
+        }
+      }
+
+      // Strategy 3: Search near engagement buttons (last resort)
+      if (!metrics.views || metrics.views === 0) {
+        // Look for numbers that appear after the engagement buttons
+        const allLinks = article.querySelectorAll('a');
+        for (const link of allLinks) {
+          const href = link.getAttribute('href') || '';
+          // Skip navigation links, only check potential analytics/view links
+          if (href.includes('/status/') || href.includes('/analytics')) {
+            const text = link.textContent || '';
+            const numberMatch = text.match(/([\d.,]+)\s*([a-zA-Z]+)?/i);
+            if (numberMatch) {
+              const fullNumber = numberMatch[0].trim();
+              const possibleViews = parseFormattedNumber(fullNumber);
+
+              // Only accept if it's larger than engagement metrics
+              if (possibleViews > Math.max(metrics.likes, metrics.reposts, metrics.comments)) {
+                metrics.views = possibleViews;
+                console.log(`  Strategy 3 (link search): "${text}" → Views: ${metrics.views}`);
+                break;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Extract timestamp - exclude quoted tweets
+    // Quoted tweets are typically in a div with specific attributes
+    let timeElement = null;
+    const allTimeElements = article.querySelectorAll('time');
+
+    for (const time of allTimeElements) {
+      // Check if this time element is inside a quoted tweet
+      // Quoted tweets usually have a specific parent structure
+      const isInQuotedTweet = time.closest('[role="link"]')?.querySelector('[data-testid="tweetText"]');
+
+      if (!isInQuotedTweet) {
+        // This is the main tweet's timestamp
+        timeElement = time;
+        break;
+      }
+    }
+
+    // Fallback: if we didn't find one, use the last time element (main tweet is usually last)
+    if (!timeElement && allTimeElements.length > 0) {
+      timeElement = allTimeElements[allTimeElements.length - 1];
+    }
+
+    if (timeElement) {
+      const datetime = timeElement.getAttribute('datetime');
+      if (datetime) {
+        metrics.timestamp = new Date(datetime);
+        const now = new Date();
+        metrics.hoursAgo = (now - metrics.timestamp) / (1000 * 60 * 60);
+        console.log(`⏰ Tweet age: ${metrics.hoursAgo.toFixed(1)} hours`);
+      }
+    }
+  } catch (error) {
+    console.error('❌ Error extracting tweet metrics:', error);
+  }
+
+  console.log('📈 Final metrics:', metrics);
+  return metrics;
+}
+
+// Calculate engagement score based on the specified algorithm
+function calculateEngagementScore(metrics) {
+  const { comments, reposts, likes, views, hoursAgo } = metrics;
+
+  // 1. Base Engagement Metrics (Logarithmic Scale)
+  const commentScore = 3 * Math.log(comments + 1);
+  const repostScore = 2.5 * Math.log(reposts + 1);
+  const likeScore = 2 * Math.log(likes + 1);
+  const viewScore = 1.5 * Math.log(views / 100 + 1);
+
+  // 2. Time Decay Factor
+  const timeFactor = 1 + Math.exp(-hoursAgo / 2);
+
+  // 3. Engagement Velocity
+  const velocity = (comments + reposts + likes) / (hoursAgo + 0.1);
+  const velocityScore = 5 * Math.log(velocity + 1);
+
+  // 4. Engagement Quality Ratio
+  const totalEngagement = comments + reposts + likes;
+  const qualityRatio = totalEngagement > 0 ? (comments + reposts) / totalEngagement : 0;
+  const qualityScore = 10 * qualityRatio;
+
+  // 5. Final Score
+  const rawScore = commentScore + repostScore + likeScore + viewScore;
+  const finalScore = Math.min(100, rawScore * timeFactor + velocityScore + qualityScore);
+
+  return {
+    score: Math.ceil(Math.max(1, finalScore)), // Always round up
+    breakdown: {
+      commentScore,
+      repostScore,
+      likeScore,
+      viewScore,
+      timeFactor,
+      velocityScore,
+      qualityScore,
+      rawScore
+    }
+  };
+}
+
+// Get score badge emoji and color based on score
+function getScoreBadgeStyle(score) {
+  if (score >= 80) {
+    return { emoji: '🔥', color: '#ef4444', borderColor: '#ef4444', label: 'Viral' };
+  } else if (score >= 50) {
+    return { emoji: '⚡', color: '#f97316', borderColor: '#f97316', label: 'Potential' };
+  } else {
+    return { emoji: '💤', color: '#6b7280', borderColor: '#6b7280', label: 'Low Engagement' };
+  }
+}
+
+// Format time ago string
+function formatTimeAgo(hoursAgo) {
+  if (hoursAgo < 1) {
+    const minutes = Math.floor(hoursAgo * 60);
+    return `${minutes}m ago`;
+  } else if (hoursAgo < 24) {
+    return `${Math.floor(hoursAgo)}h ago`;
+  } else {
+    const days = Math.floor(hoursAgo / 24);
+    return `${days}d ago`;
+  }
+}
+
+// Create score badge element
+function createScoreBadge(score, metrics) {
+  const style = getScoreBadgeStyle(score);
+
+  const badge = document.createElement('div');
+  badge.className = 'engagement-score-badge';
+  badge.setAttribute('data-score', score);
+
+  Object.assign(badge.style, {
+    position: 'absolute',
+    top: '8px', // Back to top
+    right: '12px', // Right side with padding
+    backgroundColor: style.color, // Full color background
+    border: 'none', // No border
+    borderRadius: '12px',
+    padding: '6px 12px',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    fontSize: '13px',
+    fontWeight: 'bold',
+    color: 'white',
+    zIndex: 10,
+    cursor: 'pointer',
+    transition: 'transform 0.2s, box-shadow 0.2s',
+    boxShadow: `0 2px 8px rgba(0,0,0,0.3)`
+  });
+
+  badge.innerHTML = `<span>${style.emoji}</span><span>${score}</span>`;
+
+  // Add hover effect - brighten on hover
+  badge.addEventListener('mouseenter', () => {
+    badge.style.transform = 'scale(1.08)';
+    badge.style.boxShadow = `0 4px 16px ${style.color}99`;
+    badge.style.filter = 'brightness(1.15)';
+  });
+
+  badge.addEventListener('mouseleave', () => {
+    badge.style.transform = 'scale(1)';
+    badge.style.boxShadow = '0 2px 8px rgba(0,0,0,0.3)';
+    badge.style.filter = 'brightness(1)';
+  });
+
+  // Create and attach tooltip
+  const tooltip = createTooltip(metrics, score, style);
+  badge.appendChild(tooltip);
+
+  badge.addEventListener('mouseenter', () => {
+    tooltip.style.display = 'block';
+  });
+
+  badge.addEventListener('mouseleave', () => {
+    tooltip.style.display = 'none';
+  });
+
+  return badge;
+}
+
+// Create detailed tooltip
+function createTooltip(metrics, score, style) {
+  const tooltip = document.createElement('div');
+  tooltip.className = 'engagement-score-tooltip';
+
+  Object.assign(tooltip.style, {
+    display: 'none',
+    position: 'absolute',
+    top: '100%',
+    right: '0',
+    marginTop: '8px',
+    backgroundColor: '#15202b',
+    border: '1px solid #38444d',
+    borderRadius: '8px',
+    padding: '12px',
+    minWidth: '200px',
+    boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+    fontSize: '12px',
+    color: '#e6ecf0',
+    zIndex: 100,
+    whiteSpace: 'nowrap'
+  });
+
+  const formatNumber = (num) => {
+    if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
+    if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
+    return num.toString();
+  };
+
+  // Format view count with comma separators for precision
+  const formatViews = (num) => {
+    return Math.round(num).toLocaleString('en-US');
+  };
+
+  const timeAgo = formatTimeAgo(metrics.hoursAgo);
+
+  tooltip.innerHTML = `
+    <div style="margin-bottom:8px;font-weight:bold;color:${style.color};">
+      ${style.emoji} ${style.label} (${score})
+    </div>
+    <div style="display:flex;flex-direction:column;gap:4px;">
+      <div>💬 Replies: ${formatNumber(metrics.comments)}</div>
+      <div>🔄 Reposts: ${formatNumber(metrics.reposts)}</div>
+      <div>❤️ Likes: ${formatNumber(metrics.likes)}</div>
+      <div>👀 Views: ${formatViews(metrics.views)}</div>
+      <div style="margin-top:4px;padding-top:4px;border-top:1px solid #38444d;">
+        ⏰ ${timeAgo}
+      </div>
+      <div style="margin-top:4px;padding-top:4px;border-top:1px solid #38444d;font-style:italic;color:#8899a6;">
+        ${score >= 80 ? '💡 High engagement! Great opportunity' :
+      score >= 50 ? '💡 Worth considering for engagement' :
+        '💡 Consider if worth engaging'}
+      </div>
+    </div>
+  `;
+
+  return tooltip;
+}
+
+// Apply visual border to tweet
+function applyVisualIndicators(article, score) {
+  // Borders and visual effects disabled per user request
+  // Only the badge shows the engagement score
+  return;
+}
+
+// Process a single tweet article for engagement scoring
+function processTweetForEngagement(article) {
+  // Skip if already processed
+  if (article.hasAttribute('data-engagement-processed')) return;
+  article.setAttribute('data-engagement-processed', 'true');
+
+  console.log('Processing tweet for engagement score...');
+
+  // Extract metrics
+  const metrics = extractTweetMetrics(article);
+
+  console.log('Extracted metrics:', metrics);
+
+  // Don't skip tweets - even low/zero engagement tweets should get a score
+  // The algorithm will naturally give them a low score
+
+  // Calculate score
+  const { score, breakdown } = calculateEngagementScore(metrics);
+
+  // Store score on element
+  article.setAttribute('data-engagement-score', score);
+
+  // Create and add badge
+  const badge = createScoreBadge(score, metrics);
+
+  // Ensure article has relative or absolute positioning for badge placement
+  const currentPosition = window.getComputedStyle(article).position;
+  if (currentPosition === 'static') {
+    article.style.position = 'relative';
+  }
+
+  // Add padding to top of article to make space for the badge
+  // This prevents the badge from overlapping with the three-dot menu or other buttons
+  const currentPaddingTop = window.getComputedStyle(article).paddingTop;
+  const currentPadding = parseInt(currentPaddingTop) || 0;
+  article.style.paddingTop = `${Math.max(currentPadding, 40)}px`; // Ensure at least 40px space
+
+  // Append badge directly to article
+  article.appendChild(badge);
+
+  console.log(`Added engagement badge to tweet with score: ${score}`);
+
+  // Apply visual indicators
+  applyVisualIndicators(article, score);
+
+  console.log(`Engagement score for tweet: ${score}`, metrics, breakdown);
+}
+
+// Apply engagement scores to all tweets on page
+function applyEngagementScoresToAllTweets() {
+  const settings = settingsCache;
+
+  // Skip if feature is disabled
+  if (!settings.showEngagementScore) {
+    console.log('Engagement scores disabled in settings');
+    return;
+  }
+
+  // Find all tweet articles
+  const tweets = document.querySelectorAll('article[data-testid="tweet"]');
+
+  console.log(`Found ${tweets.length} tweets to process`);
+
+  tweets.forEach(tweet => {
+    processTweetForEngagement(tweet);
+  });
+}
+
+// Toggle engagement scores visibility
+function toggleEngagementScores(enabled) {
+  settingsCache.showEngagementScore = enabled;
+
+  const badges = document.querySelectorAll('.engagement-score-badge');
+  const processedTweets = document.querySelectorAll('[data-engagement-processed]');
+
+  if (enabled) {
+    // Show badges
+    badges.forEach(badge => {
+      badge.style.display = 'flex';
+    });
+
+    // Restore borders
+    processedTweets.forEach(tweet => {
+      const score = parseInt(tweet.getAttribute('data-engagement-score'));
+      if (score) {
+        applyVisualIndicators(tweet, score);
+      }
+    });
+
+    // Process any new tweets
+    applyEngagementScoresToAllTweets();
+  } else {
+    // Hide badges
+    badges.forEach(badge => {
+      badge.style.display = 'none';
+    });
+
+    // Remove borders
+    processedTweets.forEach(tweet => {
+      const originalBorder = tweet.getAttribute('data-original-border') || '';
+      tweet.style.border = originalBorder;
+      tweet.style.boxShadow = '';
+    });
+  }
+}
+
+// Listen for messages from popup
+if (chrome?.runtime?.onMessage) {
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.type === 'toggleEngagementScore') {
+      toggleEngagementScores(message.enabled);
+      sendResponse({ success: true });
+    }
+  });
+}
+
 document.addEventListener("click", (e) => {
   const floatingWin = document.getElementById("ai-floating-replies-window");
   if (floatingWin && !floatingWin.contains(e.target)) {
@@ -528,7 +1055,42 @@ document.addEventListener("click", (e) => {
   }
 });
 
+// Initialize: Load settings and start processing
+console.log('📊 Initializing Engagement Score System...');
+
+loadSettings().then(() => {
+  console.log('✅ Settings loaded:', settingsCache);
+  console.log('🎯 Engagement scores enabled:', settingsCache.showEngagementScore);
+
+  // Apply engagement scores initially
+  console.log('🔍 Applying initial engagement scores...');
+  applyEngagementScoresToAllTweets();
+
+  // Set up MutationObserver for dynamically loaded tweets
+  const observer = new MutationObserver((mutations) => {
+    if (settingsCache.showEngagementScore) {
+      applyEngagementScoresToAllTweets();
+    }
+  });
+
+  observer.observe(document.body, {
+    childList: true,
+    subtree: true
+  });
+
+  console.log('👀 MutationObserver set up for dynamic tweets');
+}).catch((error) => {
+  console.error('❌ Failed to initialize engagement scores:', error);
+});
+
 // Re-insert buttons every 3 seconds
 setInterval(() => {
   insertButtonIntoReplyBoxes();
 }, 3000);
+
+// Re-apply engagement scores every 5 seconds for new tweets
+setInterval(() => {
+  if (settingsCache.showEngagementScore) {
+    applyEngagementScoresToAllTweets();
+  }
+}, 5000);

@@ -90,6 +90,26 @@
       color: #1da1f2;
       min-height: 16px;
     }
+
+    .toggle-switch input:checked+.toggle-slider {
+      background: #1da1f2;
+    }
+
+    .toggle-slider::before {
+      content: "";
+      position: absolute;
+      height: 18px;
+      width: 18px;
+      left: 3px;
+      bottom: 3px;
+      background: white;
+      border-radius: 50%;
+      transition: 0.3s;
+    }
+
+    .toggle-switch input:checked+.toggle-slider::before {
+      transform: translateX(20px);
+    }
   </style>
 </head>
 
@@ -105,6 +125,18 @@
       <option value="grok">Grok (grok-4-1-fast-reasoning)</option>
     </select>
     <div class="hint">Choose which API to call for replies.</div>
+  </div>
+  <div class="field">
+    <label for="showEngagementScore">Show Engagement Scores</label>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <label class="toggle-switch" style="position:relative;display:inline-block;width:44px;height:24px;">
+        <input type="checkbox" id="showEngagementScore" style="opacity:0;width:0;height:0;">
+        <span class="toggle-slider"
+          style="position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:#38444d;border-radius:24px;transition:0.3s;"></span>
+      </label>
+      <span id="toggleLabel" style="font-size:13px;color:#8899a6;">Off</span>
+    </div>
+    <div class="hint">Display engagement scores and visual indicators on tweets.</div>
   </div>
   <div class="field">
     <label for="apiKey">Groq API Key</label>
