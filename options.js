@@ -18,13 +18,19 @@ function showStatus(message) {
 }
 
 function loadSettings() {
-  chrome.storage.sync.get(["provider", "groqApiKey", "openaiApiKey", "geminiApiKey", "grokApiKey", "replyPrompt"], (data) => {
+  chrome.storage.sync.get(["provider", "groqApiKey", "openaiApiKey", "geminiApiKey", "grokApiKey", "replyPrompt", "groqModel"], (data) => {
     const provider = data.provider || "groq";
     $("provider").value = provider;
     const keyField = PROVIDER_KEY_FIELDS[provider];
     $("apiKey").value = data[keyField.key] || "";
     $("prompt").value = data.replyPrompt ?? DEFAULT_PROMPT;
+
+    // Load Groq model
+    const groqModel = data.groqModel || "openai/gpt-oss-120b";
+    $("groqModel").value = groqModel;
+
     updateKeyLabel(provider);
+    toggleGroqModelField(provider);
   });
 }
 
@@ -32,11 +38,13 @@ function saveSettings() {
   const provider = $("provider").value;
   const apiKey = $("apiKey").value.trim();
   const replyPrompt = $("prompt").value.trim();
+  const groqModel = $("groqModel").value;
 
   chrome.storage.sync.get(["groqApiKey", "openaiApiKey", "geminiApiKey", "grokApiKey"], (data) => {
     const payload = {
       provider,
       replyPrompt,
+      groqModel,
       groqApiKey: data.groqApiKey || "",
       openaiApiKey: data.openaiApiKey || "",
       geminiApiKey: data.geminiApiKey || "",
@@ -63,11 +71,21 @@ function updateKeyLabel(provider) {
   $("keyHint").textContent = `Stored locally via chrome.storage for ${meta.label.split(" ")[0]}.`;
 }
 
+function toggleGroqModelField(provider) {
+  const groqModelField = $("groqModelField");
+  if (provider === "groq") {
+    groqModelField.style.display = "block";
+  } else {
+    groqModelField.style.display = "none";
+  }
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   loadSettings();
   $("provider").addEventListener("change", () => {
     const provider = $("provider").value;
     updateKeyLabel(provider);
+    toggleGroqModelField(provider);
     chrome.storage.sync.get(Object.values(PROVIDER_KEY_FIELDS).map((m) => m.key), (data) => {
       const meta = PROVIDER_KEY_FIELDS[provider];
       $("apiKey").value = data[meta.key] || "";

@@ -20,6 +20,7 @@ const settingsCache = {
   grokApiKey: "",
   prompt: DEFAULT_PROMPT,
   showEngagementScore: true,
+  groqModel: "openai/gpt-oss-120b",
   loaded: false,
 };
 
@@ -32,7 +33,7 @@ function loadSettings() {
       return resolve(settingsCache);
     }
 
-    chrome.storage.sync.get(["provider", "groqApiKey", "openaiApiKey", "geminiApiKey", "grokApiKey", "replyPrompt", "showEngagementScore"], (data) => {
+    chrome.storage.sync.get(["provider", "groqApiKey", "openaiApiKey", "geminiApiKey", "grokApiKey", "replyPrompt", "showEngagementScore", "groqModel"], (data) => {
       settingsCache.provider = data.provider || "groq";
       settingsCache.groqApiKey = data.groqApiKey || "";
       settingsCache.openaiApiKey = data.openaiApiKey || "";
@@ -40,6 +41,7 @@ function loadSettings() {
       settingsCache.grokApiKey = data.grokApiKey || "";
       settingsCache.prompt = data.replyPrompt ?? DEFAULT_PROMPT;
       settingsCache.showEngagementScore = data.showEngagementScore !== undefined ? data.showEngagementScore : true;
+      settingsCache.groqModel = data.groqModel || "openai/gpt-oss-120b";
       settingsCache.loaded = true;
       resolve(settingsCache);
     });
@@ -75,12 +77,21 @@ function getProviderConfig(settings) {
       isGemini: false,
     };
   }
+
+  // Detect if this is a reasoning model
+  const groqModel = settings.groqModel || "openai/gpt-oss-120b";
+  const isReasoningModel = groqModel.includes("reasoning") ||
+    groqModel.includes("o1") ||
+    groqModel.includes("o3") ||
+    groqModel.includes("deepseek-reasoner");
+
   return {
     provider: "groq",
     apiKey: settings.groqApiKey || "",
     url: "https://api.groq.com/openai/v1/chat/completions",
-    model: "llama-3.1-8b-instant",
+    model: groqModel,
     isGemini: false,
+    isReasoning: isReasoningModel,
   };
 }
 
@@ -214,10 +225,7 @@ async function generateText(box, container) {
     }
 
     const userPrompt = settings.prompt || "";
-    const prompt = `${userPrompt}
-
-tweet:
-${tweetText}`;
+    const tweetContent = `tweet:\n${tweetText}`;
 
     // Generate random seed for variety (Groq/OpenAI only)
     const seed = Math.floor(Math.random() * 1000000);
@@ -234,7 +242,7 @@ ${tweetText}`;
           contents: [
             {
               parts: [
-                { text: `System: ${userPrompt}\n\nUser:\n${prompt}` }
+                { text: `System: ${userPrompt}\n\nUser:\n${tweetContent}` }
               ]
             }
           ]
@@ -247,23 +255,41 @@ ${tweetText}`;
       if (!response.ok) throw new Error(`HTTP error! Status: ${response.status} - ${data.error?.message || 'No additional details'}`);
       replyText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
     } else {
+      // For reasoning models, combine system and user into single user message
+      // Reasoning models often don't support system messages
+      const messages = providerConfig.isReasoning ?
+        [{
+          role: "user",
+          content: `${userPrompt}\n\n${tweetContent}`
+        }] :
+        [
+          { role: "system", content: userPrompt },
+          { role: "user", content: tweetContent },
+        ];
+
+
+      // Build request body
+      const requestBody = {
+        model: providerConfig.model,
+        messages: messages,
+        max_tokens: 200,
+        temperature: 0.9,
+        top_p: 1,
+        seed: seed,
+      };
+
+      // Add reasoning_effort for reasoning models
+      if (providerConfig.isReasoning) {
+        requestBody.reasoning_effort = "medium"; // Options: low, medium, high
+      }
+
       const response = await fetch(providerConfig.url, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${providerConfig.apiKey}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          model: providerConfig.model,
-          messages: [
-            { role: "system", content: userPrompt },
-            { role: "user", content: prompt },
-          ],
-          max_tokens: 200,
-          temperature: 0.9,
-          top_p: 1,
-          seed: seed,
-        }),
+        body: JSON.stringify(requestBody),
       });
 
       console.log("GenerateText Response status:", response.status);
@@ -271,6 +297,17 @@ ${tweetText}`;
       console.log("GenerateText Raw response:", data.choices?.[0]?.message?.content || "No content");
       if (!response.ok) throw new Error(`HTTP error! Status: ${response.status} - ${data.error?.message || 'No additional details'}`);
       replyText = data.choices?.[0]?.message?.content;
+
+      // For reasoning models, extract final answer (remove thinking/reasoning tags)
+      if (providerConfig.isReasoning && replyText) {
+        replyText = replyText
+          .replace(/<think>[\s\S]*?<\/think>/gi, '')
+          .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, '')
+          .replace(/\[REASONING\][\s\S]*?\[\/REASONING\]/gi, '')
+          .replace(/^(Thinking:|Reasoning:)[\s\S]*?(?=\n\n)/gim, '')
+          .trim();
+        console.log("Extracted final answer from reasoning model");
+      }
     }
 
     if (!replyText) {
@@ -298,35 +335,43 @@ function insertTextProperly(el, text) {
   // Focus the element first
   el.focus();
 
-  // Select all existing content
-  const selection = window.getSelection();
-  const range = document.createRange();
-  range.selectNodeContents(el);
-  selection.removeAllRanges();
-  selection.addRange(range);
-
-  // Use execCommand to insert text - this maintains editability better
   try {
-    // First, try using execCommand which works well with contenteditable
+    // Select all existing content
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    // Use execCommand which properly enables send button
     const success = document.execCommand('insertText', false, text);
 
     if (!success) {
       throw new Error("execCommand failed");
     }
 
-    // Trigger input event for React
-    const inputEvent = new InputEvent('input', {
-      bubbles: true,
-      cancelable: true,
-      data: text,
-      inputType: 'insertText'
-    });
-    el.dispatchEvent(inputEvent);
+    // Immediately dismiss autocomplete by simulating Escape key
+    setTimeout(() => {
+      // Press Escape to close autocomplete dropdown
+      const escapeEvent = new KeyboardEvent('keydown', {
+        key: 'Escape',
+        keyCode: 27,
+        code: 'Escape',
+        which: 27,
+        bubbles: true,
+        cancelable: true
+      });
+      document.dispatchEvent(escapeEvent);
+      el.dispatchEvent(escapeEvent);
 
-    // Try to trigger React's onChange handler
-    triggerReactChange(el);
+      // Also try to hide dropdown directly
+      const dropdowns = document.querySelectorAll('[data-testid="typeaheadDropdown"], [role="listbox"]');
+      dropdowns.forEach(dropdown => {
+        dropdown.remove(); // Remove it completely
+      });
+    }, 50);
 
-    // Place cursor at the end
+    // Place cursor at end
     setTimeout(() => {
       el.focus();
       const sel = window.getSelection();
@@ -335,48 +380,14 @@ function insertTextProperly(el, text) {
       rng.collapse(false);
       sel.removeAllRanges();
       sel.addRange(rng);
-    }, 10);
+    }, 100);
 
-  } catch (e) {
-    console.error("execCommand insertion failed, trying alternative:", e);
-
-    // Alternative method: Set textContent and trigger events
-    try {
-      el.textContent = text;
-
-      // Trigger comprehensive events
-      const events = [
-        new Event('focus', { bubbles: true }),
-        new InputEvent('input', {
-          bubbles: true,
-          cancelable: true,
-          data: text,
-          inputType: 'insertText'
-        }),
-        new Event('change', { bubbles: true }),
-        new KeyboardEvent('keyup', { bubbles: true })
-      ];
-
-      events.forEach(event => el.dispatchEvent(event));
-
-      // Try to trigger React's onChange handler
-      triggerReactChange(el);
-
-      // Place cursor at the end
-      setTimeout(() => {
-        el.focus();
-        const sel = window.getSelection();
-        const rng = document.createRange();
-        rng.selectNodeContents(el);
-        rng.collapse(false);
-        sel.removeAllRanges();
-        sel.addRange(rng);
-      }, 10);
-
-    } catch (err) {
-      console.error("Alternative insertion method failed:", err);
-      fallbackInsertion(el, text);
-    }
+  } catch (err) {
+    console.error("Text insertion failed:", err);
+    // Fallback
+    el.textContent = text;
+    el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+    el.focus();
   }
 }
 

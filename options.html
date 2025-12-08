@@ -98,12 +98,27 @@
       <label for="provider">Provider</label>
       <select id="provider"
         style="width:100%;padding:10px;border-radius:8px;border:1px solid #38444d;background:#0f1419;color:#e6ecf0;font-size:14px;">
-        <option value="groq">Groq (llama-3.1-8b-instant)</option>
+        <option value="groq">Groq</option>
         <option value="openai">OpenAI (gpt-4o-mini)</option>
         <option value="gemini">Gemini (gemini-2.0-flash)</option>
         <option value="grok">Grok (grok-4-1-fast-reasoning)</option>
       </select>
       <div class="hint">Choose which API to call for replies.</div>
+    </div>
+    <div style="margin-top:16px;" id="groqModelField">
+      <label for="groqModel">Groq Model</label>
+      <select id="groqModel"
+        style="width:100%;padding:10px;border-radius:8px;border:1px solid #38444d;background:#0f1419;color:#e6ecf0;font-size:14px;">
+        <option value="openai/gpt-oss-120b">openai/gpt-oss-120b</option>
+        <option value="qwen/qwen3-32b">qwen/qwen3-32b</option>
+        <option value="groq/compound">groq/compound</option>
+        <option value="groq/compound-mini">groq/compound-mini</option>
+        <option value="llama-3.1-8b-instant">llama-3.1-8b-instant</option>
+        <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile</option>
+        <option value="openai/gpt-oss-20b">openai/gpt-oss-20b</option>
+        <option value="moonshotai/kimi-k2-instruct-0905">moonshotai/kimi-k2-instruct-0905</option>
+      </select>
+      <div class="hint">Select which Groq model to use.</div>
     </div>
     <div style="margin-top:16px;">
       <label for="apiKey">Groq API Key</label>
