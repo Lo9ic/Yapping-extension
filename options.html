@@ -105,6 +105,13 @@
       </select>
       <div class="hint">Choose which API to call for replies.</div>
     </div>
+    <div style="margin-top:16px;">
+      <label class="checkbox-label" style="display:flex;align-items:center;cursor:pointer;">
+        <input type="checkbox" id="readImages" style="width:auto;margin-right:8px;">
+        <span>Read Images in Tweets</span>
+      </label>
+      <div class="hint">If enabled, images will be sent to the AI (requires vision-capable model).</div>
+    </div>
     <div style="margin-top:16px;" id="groqModelField">
       <label for="groqModel">Groq Model</label>
       <select id="groqModel"
@@ -113,6 +120,9 @@
         <option value="qwen/qwen3-32b">qwen/qwen3-32b</option>
         <option value="groq/compound">groq/compound</option>
         <option value="groq/compound-mini">groq/compound-mini</option>
+        <option value="meta-llama/llama-4-scout-17b-16e-instruct">llama-4-scout (17b-16e, Vision, Preview)</option>
+        <option value="meta-llama/llama-4-maverick-17b-128e-instruct">llama-4-maverick (17b-128e, Vision, Preview)
+        </option>
         <option value="llama-3.1-8b-instant">llama-3.1-8b-instant</option>
         <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile</option>
         <option value="openai/gpt-oss-20b">openai/gpt-oss-20b</option>

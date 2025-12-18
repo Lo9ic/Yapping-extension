@@ -134,6 +134,8 @@
       <option value="qwen/qwen3-32b">qwen/qwen3-32b</option>
       <option value="groq/compound">groq/compound</option>
       <option value="groq/compound-mini">groq/compound-mini</option>
+      <option value="meta-llama/llama-4-scout-17b-16e-instruct">llama-4-scout (Vision)</option>
+      <option value="meta-llama/llama-4-maverick-17b-128e-instruct">llama-4-maverick (Vision)</option>
       <option value="llama-3.1-8b-instant">llama-3.1-8b-instant</option>
       <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile</option>
       <option value="openai/gpt-oss-20b">openai/gpt-oss-20b</option>
@@ -152,6 +154,18 @@
       <span id="toggleLabel" style="font-size:13px;color:#8899a6;">Off</span>
     </div>
     <div class="hint">Display engagement scores and visual indicators on tweets.</div>
+  </div>
+  <div class="field">
+    <label for="readImages">Read Images in Tweets</label>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <label class="toggle-switch" style="position:relative;display:inline-block;width:44px;height:24px;">
+        <input type="checkbox" id="readImages" style="opacity:0;width:0;height:0;">
+        <span class="toggle-slider"
+          style="position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:#38444d;border-radius:24px;transition:0.3s;"></span>
+      </label>
+      <span id="readImagesLabel" style="font-size:13px;color:#8899a6;">On</span>
+    </div>
+    <div class="hint">Send images to AI for context (requires vision model).</div>
   </div>
   <div class="field">
     <label for="apiKey">Groq API Key</label>

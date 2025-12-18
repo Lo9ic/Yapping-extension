@@ -18,8 +18,9 @@ const settingsCache = {
   openaiApiKey: "",
   geminiApiKey: "",
   grokApiKey: "",
-  prompt: DEFAULT_PROMPT,
+  replyPrompt: DEFAULT_PROMPT,
   showEngagementScore: true,
+  readImages: true,
   groqModel: "openai/gpt-oss-120b",
   loaded: false,
 };
@@ -39,8 +40,10 @@ function loadSettings() {
       settingsCache.openaiApiKey = data.openaiApiKey || "";
       settingsCache.geminiApiKey = data.geminiApiKey || "";
       settingsCache.grokApiKey = data.grokApiKey || "";
+      settingsCache.grokApiKey = data.grokApiKey || "";
       settingsCache.prompt = data.replyPrompt ?? DEFAULT_PROMPT;
       settingsCache.showEngagementScore = data.showEngagementScore !== undefined ? data.showEngagementScore : true;
+      settingsCache.readImages = data.readImages !== false; // Default true
       settingsCache.groqModel = data.groqModel || "openai/gpt-oss-120b";
       settingsCache.loaded = true;
       resolve(settingsCache);
@@ -178,6 +181,67 @@ function insertButtonIntoReplyBoxes() {
   });
 }
 
+// Image extraction helpers
+async function fetchImageAsBase64(url) {
+  try {
+    const response = await fetch(url);
+    const blob = await response.blob();
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64String = reader.result.split(',')[1];
+        resolve({
+          base64: base64String,
+          mimeType: blob.type
+        });
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  } catch (error) {
+    console.error("Error fetching image:", error);
+    return null;
+  }
+}
+
+function extractImagesFromContainer(container) {
+  const images = [];
+  // Look for tweet photos
+  const photoElements = container.querySelectorAll('div[data-testid="tweetPhoto"] img');
+  photoElements.forEach(img => {
+    if (img.src) {
+      images.push({
+        url: img.src
+      });
+    }
+  });
+
+  // Look for video posters (better than nothing)
+  if (images.length === 0) {
+    const videoPosters = container.querySelectorAll('video[poster]');
+    videoPosters.forEach(video => {
+      if (video.poster) {
+        images.push({
+          url: video.poster
+        });
+      }
+    });
+  }
+
+  // Deduplicate based on URL
+  const uniqueImages = [];
+  const seenUrls = new Set();
+
+  for (const img of images) {
+    if (!seenUrls.has(img.url)) {
+      seenUrls.add(img.url);
+      uniqueImages.push(img);
+    }
+  }
+
+  return uniqueImages;
+}
+
 async function generateText(box, container) {
   const floatingWin = createOrGetFloatingWindow();
 
@@ -188,8 +252,15 @@ async function generateText(box, container) {
   try {
     const settings = await loadSettings();
     const providerConfig = getProviderConfig(settings);
-    const tweetText = getTweetTextFromDOM(box);
-    if (!tweetText) throw new Error("Could not get tweet text.");
+
+    // Get tweet content (text + images)
+    const tweetContentData = getTweetTextFromDOM(box);
+    const tweetText = tweetContentData.text;
+
+    // Only use images if setting is enabled
+    const requestImages = settings.readImages ? (tweetContentData.images || []) : [];
+
+    if (!tweetText && requestImages.length === 0) throw new Error("Could not get tweet content.");
 
     if (!providerConfig.apiKey) {
       floatingWin.innerHTML = "";
@@ -225,14 +296,42 @@ async function generateText(box, container) {
     }
 
     const userPrompt = settings.prompt || "";
-    const tweetContent = `tweet:\n${tweetText}`;
+    let finalPromptText = `tweet:\n${tweetText}`;
+    if (requestImages.length > 0) {
+      finalPromptText += `\n\n[Attached ${requestImages.length} image(s)]`;
+    }
 
     // Generate random seed for variety (Groq/OpenAI only)
     const seed = Math.floor(Math.random() * 1000000);
     console.log("GenerateText Seed:", seed, "Provider:", providerConfig.provider);
 
     let replyText = "";
+
+    // Fetch images if we have them and the provider supports them (or we just send them anyway and hope)
+    // We assume Gemini and OpenAI based endpoints can handle vision if structured correctly.
+    // Base64 conversion
+    const imageDatas = [];
+    if (requestImages.length > 0) {
+      console.log(`Fetching ${requestImages.length} images...`);
+      for (const imgObj of requestImages) {
+        const data = await fetchImageAsBase64(imgObj.url);
+        if (data) imageDatas.push(data);
+      }
+    }
+
     if (providerConfig.isGemini) {
+      const parts = [{ text: `System: ${userPrompt}\n\nUser:\n${finalPromptText}` }];
+
+      // Add images for Gemini
+      imageDatas.forEach(img => {
+        parts.push({
+          inline_data: {
+            mime_type: img.mimeType,
+            data: img.base64
+          }
+        });
+      });
+
       const response = await fetch(`${providerConfig.url}?key=${providerConfig.apiKey}`, {
         method: "POST",
         headers: {
@@ -241,9 +340,7 @@ async function generateText(box, container) {
         body: JSON.stringify({
           contents: [
             {
-              parts: [
-                { text: `System: ${userPrompt}\n\nUser:\n${tweetContent}` }
-              ]
+              parts: parts
             }
           ]
         }),
@@ -255,18 +352,42 @@ async function generateText(box, container) {
       if (!response.ok) throw new Error(`HTTP error! Status: ${response.status} - ${data.error?.message || 'No additional details'}`);
       replyText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
     } else {
-      // For reasoning models, combine system and user into single user message
-      // Reasoning models often don't support system messages
-      const messages = providerConfig.isReasoning ?
-        [{
-          role: "user",
-          content: `${userPrompt}\n\n${tweetContent}`
-        }] :
-        [
-          { role: "system", content: userPrompt },
-          { role: "user", content: tweetContent },
+      // For OpenAI/Groq
+
+      let messages;
+
+      if (imageDatas.length > 0 && !providerConfig.isReasoning) {
+        // Multimodal request structure (OpenAI Vision compatible)
+        const content = [
+          { type: "text", text: finalPromptText }
         ];
 
+        imageDatas.forEach(img => {
+          content.push({
+            type: "image_url",
+            image_url: {
+              url: `data:${img.mimeType};base64,${img.base64}`
+            }
+          });
+        });
+
+        messages = [
+          { role: "system", content: userPrompt },
+          { role: "user", content: content }
+        ];
+      } else {
+        // Standard text-only request
+        // For reasoning models, combine system and user into single user message
+        messages = providerConfig.isReasoning ?
+          [{
+            role: "user",
+            content: `${userPrompt}\n\n${finalPromptText}`
+          }] :
+          [
+            { role: "system", content: userPrompt },
+            { role: "user", content: finalPromptText },
+          ];
+      }
 
       // Build request body
       const requestBody = {
@@ -473,45 +594,75 @@ function extractTweetTextFromContainer(container) {
     'div[lang] span'
   ];
 
+  let text = "";
   for (const selector of TWEET_TEXT_SELECTORS) {
     const elements = container.querySelectorAll(selector);
     for (const el of elements) {
-      const text = el.innerText.trim();
-      if (text && text.length > 5) return text;
+      const t = el.innerText.trim();
+      if (t && t.length > 5) {
+        text = t;
+        break;
+      }
     }
+    if (text) break;
   }
-  return "";
+
+  // Extract images
+  const images = extractImagesFromContainer(container);
+
+  return {
+    text: text,
+    images: images
+  };
 }
 
 function getTweetTextFromDOM(replyBox) {
   console.log("getTweetTextFromDOM: Starting with replyBox:", replyBox);
 
   // Try multiple approaches to find the tweet text
-  let tweetText = "";
+  let tweetData = { text: "", images: [] };
+
+  // Helper to merge data
+  const mergeData = (newData) => {
+    if (newData.text && !tweetData.text) tweetData.text = newData.text;
+    if (newData.images && newData.images.length > 0) {
+      // Merge unique images by URL
+      const existingUrls = new Set(tweetData.images.map(i => i.url));
+      for (const img of newData.images) {
+        if (!existingUrls.has(img.url)) {
+          tweetData.images.push(img);
+          existingUrls.add(img.url);
+        }
+      }
+    }
+  };
 
   // Method 1: Look for the tweet in the same article as the reply box
   const article = replyBox.closest("article");
   if (article) {
-    tweetText = extractTweetTextFromContainer(article);
-    if (tweetText) console.log("getTweetTextFromDOM: Found tweet text within article:", tweetText);
+    const data = extractTweetTextFromContainer(article);
+    mergeData(data);
+    if (tweetData.text) console.log("getTweetTextFromDOM: Found tweet text within article:", tweetData.text);
   }
 
   // Method 2: If not found in article, try looking in the dialog
-  if (!tweetText) {
+  if (!tweetData.text) {
     const dialog = replyBox.closest('[role="dialog"]');
     if (dialog) {
-      tweetText = extractTweetTextFromContainer(dialog);
-      if (tweetText) console.log("getTweetTextFromDOM: Found tweet text in dialog:", tweetText);
+      const data = extractTweetTextFromContainer(dialog);
+      mergeData(data);
+      if (tweetData.text) console.log("getTweetTextFromDOM: Found tweet text in dialog:", tweetData.text);
     }
   }
 
   // Method 3: Try to find the tweet by looking up the DOM tree
-  if (!tweetText) {
+  if (!tweetData.text) {
     let parent = replyBox.parentElement;
     while (parent && parent !== document.body) {
-      tweetText = extractTweetTextFromContainer(parent);
-      if (tweetText) {
-        console.log("getTweetTextFromDOM: Found tweet text by traversing up:", tweetText);
+      const data = extractTweetTextFromContainer(parent);
+      if (data.text) {
+        mergeData(data);
+        console.log("getTweetTextFromDOM: Found tweet text by traversing up:", tweetData.text);
         break;
       }
       parent = parent.parentElement;
@@ -519,20 +670,25 @@ function getTweetTextFromDOM(replyBox) {
   }
 
   // Method 4: Last resort - try to find any element with substantial text near the reply box
-  if (!tweetText) {
+  if (!tweetData.text) {
     const nearbyElements = document.querySelectorAll('div[data-testid="tweetText"], article[data-testid="tweet"]');
     for (const el of nearbyElements) {
-      const text = extractTweetTextFromContainer(el) || el.innerText.trim();
-      if (text && text.length > 5) {
-        tweetText = text;
-        console.log("getTweetTextFromDOM: Found tweet text as last resort:", tweetText);
+      const data = extractTweetTextFromContainer(el);
+      // Fallback for text only if container extraction failed to get text directly but el has innerText
+      if (!data.text && el.innerText.trim().length > 5) {
+        data.text = el.innerText.trim();
+      }
+
+      if (data.text && data.text.length > 5) {
+        mergeData(data);
+        console.log("getTweetTextFromDOM: Found tweet text as last resort:", tweetData.text);
         break;
       }
     }
   }
 
-  console.log("getTweetTextFromDOM: Final tweet text:", tweetText);
-  return tweetText;
+  console.log("getTweetTextFromDOM: Final tweet data:", tweetData);
+  return tweetData;
 }
 
 // ===== ENGAGEMENT SCORE SYSTEM =====
