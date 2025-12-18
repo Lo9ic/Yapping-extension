@@ -33,10 +33,8 @@ function loadSettings() {
     $("showEngagementScore").checked = showEngagementScore;
     $("toggleLabel").textContent = showEngagementScore ? "On" : "Off";
 
-    // Load read images toggle
-    const readImages = data.readImages !== false; // Default true
-    $("readImages").checked = readImages;
-    $("readImagesLabel").textContent = readImages ? "On" : "Off";
+    $("showEngagementScore").checked = showEngagementScore;
+    $("toggleLabel").textContent = showEngagementScore ? "On" : "Off";
 
     updateKeyLabel(provider);
     toggleGroqModelField(provider);
@@ -48,7 +46,6 @@ function saveSettings() {
   const apiKey = $("apiKey").value.trim();
   const replyPrompt = $("prompt").value.trim();
   const showEngagementScore = $("showEngagementScore").checked;
-  const readImages = $("readImages").checked;
   const groqModel = $("groqModel").value;
 
   chrome.storage.sync.get(["groqApiKey", "openaiApiKey", "geminiApiKey", "grokApiKey"], (data) => {
@@ -56,7 +53,6 @@ function saveSettings() {
       provider,
       replyPrompt,
       showEngagementScore,
-      readImages,
       groqModel,
       groqApiKey: data.groqApiKey || "",
       openaiApiKey: data.openaiApiKey || "",
@@ -127,11 +123,5 @@ document.addEventListener("DOMContentLoaded", () => {
   $("showEngagementScore").addEventListener("change", (e) => {
     $("toggleLabel").textContent = e.target.checked ? "On" : "Off";
     saveSettings(); // Auto-save when toggled
-  });
-
-  // Handle read images toggle
-  $("readImages").addEventListener("change", (e) => {
-    $("readImagesLabel").textContent = e.target.checked ? "On" : "Off";
-    saveSettings();
   });
 });

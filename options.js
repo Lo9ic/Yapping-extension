@@ -24,7 +24,6 @@ function loadSettings() {
     const keyField = PROVIDER_KEY_FIELDS[provider];
     $("apiKey").value = data[keyField.key] || "";
     $("prompt").value = data.replyPrompt ?? DEFAULT_PROMPT;
-    $("readImages").checked = data.readImages !== false; // Default to true
 
     // Load Groq model
     const groqModel = data.groqModel || "openai/gpt-oss-120b";
@@ -40,13 +39,11 @@ function saveSettings() {
   const apiKey = $("apiKey").value.trim();
   const replyPrompt = $("prompt").value.trim();
   const groqModel = $("groqModel").value;
-  const readImages = $("readImages").checked;
 
   chrome.storage.sync.get(["groqApiKey", "openaiApiKey", "geminiApiKey", "grokApiKey"], (data) => {
     const payload = {
       provider,
       replyPrompt,
-      readImages,
       groqModel,
       groqApiKey: data.groqApiKey || "",
       openaiApiKey: data.openaiApiKey || "",

@@ -42,8 +42,9 @@ function loadSettings() {
       settingsCache.grokApiKey = data.grokApiKey || "";
       settingsCache.grokApiKey = data.grokApiKey || "";
       settingsCache.prompt = data.replyPrompt ?? DEFAULT_PROMPT;
+      settingsCache.grokApiKey = data.grokApiKey || "";
+      settingsCache.prompt = data.replyPrompt ?? DEFAULT_PROMPT;
       settingsCache.showEngagementScore = data.showEngagementScore !== undefined ? data.showEngagementScore : true;
-      settingsCache.readImages = data.readImages !== false; // Default true
       settingsCache.groqModel = data.groqModel || "openai/gpt-oss-120b";
       settingsCache.loaded = true;
       resolve(settingsCache);
@@ -60,6 +61,7 @@ function getProviderConfig(settings) {
       url: "https://api.openai.com/v1/chat/completions",
       model: "gpt-4o-mini",
       isGemini: false,
+      isVision: true, // GPT-4o-mini supports vision
     };
   }
   if (provider === "gemini") {
@@ -69,6 +71,7 @@ function getProviderConfig(settings) {
       url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
       model: "gemini-2.0-flash",
       isGemini: true,
+      isVision: true, // Gemini 2.0 Flash supports vision
     };
   }
   if (provider === "grok") {
@@ -78,6 +81,7 @@ function getProviderConfig(settings) {
       url: "https://api.x.ai/v1/chat/completions",
       model: "grok-4-1-fast-reasoning",
       isGemini: false,
+      isVision: false, // Currently configured as text/reasoning
     };
   }
 
@@ -88,6 +92,13 @@ function getProviderConfig(settings) {
     groqModel.includes("o3") ||
     groqModel.includes("deepseek-reasoner");
 
+  // Detect if this is a vision model (Groq Llama 4 Scout/Maverick or OpenAI GPT-4o)
+  const isVisionModel =
+    groqModel.includes("scout") ||
+    groqModel.includes("maverick") ||
+    groqModel.includes("gpt-4o") ||
+    groqModel.includes("vision");
+
   return {
     provider: "groq",
     apiKey: settings.groqApiKey || "",
@@ -95,6 +106,7 @@ function getProviderConfig(settings) {
     model: groqModel,
     isGemini: false,
     isReasoning: isReasoningModel,
+    isVision: isVisionModel,
   };
 }
 
@@ -257,8 +269,8 @@ async function generateText(box, container) {
     const tweetContentData = getTweetTextFromDOM(box);
     const tweetText = tweetContentData.text;
 
-    // Only use images if setting is enabled
-    const requestImages = settings.readImages ? (tweetContentData.images || []) : [];
+    // Only use images if provider supports vision
+    const requestImages = providerConfig.isVision ? (tweetContentData.images || []) : [];
 
     if (!tweetText && requestImages.length === 0) throw new Error("Could not get tweet content.");
 
